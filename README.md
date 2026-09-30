@@ -4,6 +4,15 @@
 > Desarrollado con **Java 17**, **Spring Boot 4** y **Spring Cloud Netflix Eureka Server**.
 
 ---
+### Ecosistema de Microservicios en GitHub
+Este microservicio forma parte de una arquitectura distribuida compuesta por los siguientes repositorios interconectados:
+* **Directorio de Servicios (Service Discovery):** [`eureka-server`](https://github.com/Alger125/eureka-server) (Puerto `8761`) *(Este repositorio)*
+* **Catalogo e Inventario NoSQL (MongoDB):** [`catalog-service`](https://github.com/Alger125/catalog-service) (Puerto `8082`)
+* **Ventas y Facturacion SQL (H2/JPA):** [`sales-service`](https://github.com/Alger125/sales-service) (Puerto `8081`)
+
+---
+
+---
 
 ## 1. Introduccion y Justificacion Arquitectonica
 
