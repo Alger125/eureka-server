@@ -7,33 +7,30 @@ import org.springframework.cloud.netflix.eureka.server.EnableEurekaServer;
 /**
  * CLASE PRINCIPAL: EurekaServerApplication
  *
- * ¿Qué es y qué función cumple este proyecto en la arquitectura?
- * Eureka Server actúa como el Directorio Telefónico o Centralita de Contactos
- * de toda nuestra arquitectura de microservicios (patrón Service Discovery).
+ * Rol arquitectonico:
+ * Servidor Central de Descubrimiento de Servicios (Service Discovery Registry).
+ * Implementa el patron de diseno Service Registry para arquitecturas distribuidas.
  *
- * Explicación para un programador Junior:
- * 1. En entornos reales o en la nube (AWS, Azure, Docker, Kubernetes), los microservicios
- * se apagan, se reinician o cambian de dirección IP y de puerto dinámicamente.
- * 2. Si un microservicio llamara a otro con una URL fija como http://192.168.1.50:8082,
- * el día que cambie la IP, todo el sistema dejaría de funcionar.
- * 3. Gracias a esta aplicación:
- * - 'sales-service' (puerto 8081) se conecta aquí y dice: Hola soy SALES-SERVICE.
- * - 'catalog-service' (puerto 8082) se conecta aquí y dice: Hola soy CATALOG-SERVICE.
- * - Cuando Ventas necesita comunicarse con Catálogo, no le pregunta a una IP fija;
- * le pregunta a Eureka: ¿En qué IP y puerto está vivo ahora mismo CATALOG-SERVICE?.
+ * Conceptos clave para desarrollo profesional:
+ * 1. Desacoplamiento de infraestructura: Evita el uso de direcciones IP y puertos estaticos
+ *    hardcodeados en los clientes.
+ * 2. Registro dinamico: Al iniciar, cada microservicio se registra con su identificador logico
+ *    (ej: SALES-SERVICE, CATALOG-SERVICE).
+ * 3. Monitoreo de salud (Heartbeats): Recibe senales periodicas cada 30 segundos para validar
+ *    la disponibilidad de las instancias activas.
+ * 4. Balanceo de carga del lado del cliente: Proporciona la lista de instancias vivas a clientes
+ *    como OpenFeign y Spring Cloud LoadBalancer.
  *
- * Anotaciones clave:
- * - @SpringBootApplication: Enciende Spring Boot y levanta el servidor web en el puerto 8761.
- * - @EnableEurekaServer: ¡La anotación mágica! Transforma este proyecto de un simple Spring Boot
- * a un servidor de registro de servicios Netflix Eureka completo, habilitando el panel web
- * de monitoreo en http://localhost:8761.
+ * Anotaciones:
+ * - @SpringBootApplication: Inicializa el contexto de Spring Boot y el servidor web embebido.
+ * - @EnableEurekaServer: Habilita los controladores de registro de Netflix Eureka y expone
+ *   el panel de administracion web en el puerto 8761.
  */
 @SpringBootApplication
 @EnableEurekaServer
 public class EurekaServerApplication {
 
- public static void main(String[] args) {
- // Arranca el servidor central de descubrimiento
- SpringApplication.run(EurekaServerApplication.class, args);
- }
+    public static void main(String[] args) {
+        SpringApplication.run(EurekaServerApplication.class, args);
+    }
 }
