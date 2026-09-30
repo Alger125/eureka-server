@@ -1,291 +1,303 @@
-# Eureka Server (eureka-server)
+# Eureka Server
 
-> **Servidor Central de Descubrimiento y Registro de Servicios (Service Discovery Registry).**  
-> Desarrollado con **Java 17**, **Spring Boot 4** y **Spring Cloud Netflix Eureka Server**.
+> Servidor central de **descubrimiento y registro de microservicios (Service Discovery Registry)** para la arquitectura distribuida de GameStore, desarrollado con Spring Cloud Netflix Eureka.
 
----
-### Ecosistema de Microservicios en GitHub
-Este microservicio forma parte de una arquitectura distribuida compuesta por los siguientes repositorios interconectados:
-* **Directorio de Servicios (Service Discovery):** [`eureka-server`](https://github.com/Alger125/eureka-server) (Puerto `8761`) *(Este repositorio)*
-* **Catalogo e Inventario NoSQL (MongoDB):** [`catalog-service`](https://github.com/Alger125/catalog-service) (Puerto `8082`)
-* **Ventas y Facturacion SQL (H2/JPA):** [`sales-service`](https://github.com/Alger125/sales-service) (Puerto `8081`)
+![Java](https://img.shields.io/badge/Java-17-orange)
+![Spring Boot](https://img.shields.io/badge/Spring%20Boot-4.1.1-brightgreen)
+![Spring Cloud](https://img.shields.io/badge/Spring%20Cloud-2025.1.3-blue)
+![Build](https://img.shields.io/badge/Build-Maven-red)
 
 ---
 
+## Tabla de contenido
+
+1. [Resumen del proyecto](#1-resumen-del-proyecto)
+2. [Stack tecnológico y por qué se eligió](#2-stack-tecnológico-y-por-qué-se-eligió)
+3. [Ecosistema de microservicios](#3-ecosistema-de-microservicios)
+4. [Decisiones de arquitectura](#4-decisiones-de-arquitectura)
+5. [Arquitectura y funcionamiento interno](#5-arquitectura-y-funcionamiento-interno)
+6. [Ciclo de vida de registro y descubrimiento](#6-ciclo-de-vida-de-registro-y-descubrimiento)
+7. [Estructura del proyecto](#7-estructura-del-proyecto)
+8. [Dashboard web de monitoreo](#8-dashboard-web-de-monitoreo)
+9. [Referencia de la API de Eureka](#9-referencia-de-la-api-de-eureka)
+10. [Manejo de resiliencia y fallas](#10-manejo-de-resiliencia-y-fallas)
+11. [Configuración](#11-configuración)
+12. [Instalación y ejecución](#12-instalación-y-ejecución)
+13. [Guía de pruebas y verificación](#13-guía-de-pruebas-y-verificación)
+14. [Solución de problemas](#14-solución-de-problemas)
+15. [Mejoras futuras](#15-mejoras-futuras)
+
 ---
 
-## 1. Introduccion y Justificacion Arquitectonica
+## 1. Resumen del proyecto
 
-En una arquitectura monolitica tradicional, todos los componentes residen en un mismo proceso en memoria, por lo que las invocaciones son llamadas a metodos directos.
+`eureka-server` actúa como el **directorio telefónico central** de todo el ecosistema de microservicios:
 
-En una **arquitectura de microservicios**, el sistema se fragmenta en multiples servicios independientes distribuidos a traves de la red. Esto introduce un desafio critico: **El problema de la localizacion dinamica de servicios**.
+| Responsabilidad | Descripción |
+|---|---|
+| Registro dinámico de servicios | Recibe y almacena metadatos (nombre lógico, IP, puerto) de cada servicio al arrancar. |
+| Monitoreo de disponibilidad (Heartbeats) | Supervisa la salud de los servicios mediante latidos periódicos cada 30 segundos. |
+| Resolución de nombres | Traduce nombres lógicos (`CATALOG-SERVICE`) a direcciones físicas en tiempo real para OpenFeign. |
+| Panel de control visual | Proporciona una interfaz web interactiva para visualizar las instancias activas del clúster. |
 
-### El Problema: ¿Por que no usar URLs fijas (Hardcoded)?
-Si dentro de `sales-service` configuraramos llamadas fijas como:
+**¿Por qué es indispensable?** En una arquitectura moderna con contenedores Docker o nubes elásticas, las IPs y puertos cambian permanentemente. Eureka desacopla la ubicación física de los microservicios, haciendo posible el escalado horizontal y la alta disponibilidad sin reconfigurar clientes.
+
+---
+
+## 2. Stack tecnológico y por qué se eligió
+
+| Tecnología | Versión | Función | ¿Por qué se usa? |
+|---|---|---|---|
+| Java | 17 | Lenguaje | Versión LTS compatible con Spring Boot y Spring Cloud modernos. |
+| Spring Boot | 4.1.1 | Framework base | Arranque rápido, servidor embebido y gestión de ciclo de vida. |
+| Spring Cloud Netflix Eureka Server | 2025.1.3 | Motor de descubrimiento | Servidor de registro estándar y maduro en el ecosistema Spring Cloud. |
+| Maven Wrapper | — | Gestor de compilación | Garantiza una compilación idéntica en cualquier máquina sin necesidad de instalar Maven globalmente. |
+
+---
+
+## 3. Ecosistema de microservicios
+
+`eureka-server` es el nodo raíz sobre el que operan los microservicios de negocio:
+
+| Servicio | Puerto | Base de datos | Rol | Repositorio |
+|---|---|---|---|---|
+| `eureka-server` | 8761 | — | Directorio de servicios (Service Discovery) | *(este repositorio)* |
+| `catalog-service` | 8082 | MongoDB | Catálogo e inventario NoSQL | [Alger125/catalog-service](https://github.com/Alger125/catalog-service) |
+| `sales-service` | 8081 | H2 (SQL) | Ventas y facturación | [Alger125/sales-service](https://github.com/Alger125/sales-service) |
+
+### Diagrama de topología de red
+
+```mermaid
+flowchart TB
+    EUR["Eureka Server Hub<br/>:8761"]
+    CAT["Catalog Service<br/>:8082"]
+    SALES["Sales Service<br/>:8081"]
+
+    CAT -- "Registro & Heartbeats" --> EUR
+    SALES -- "Registro & Heartbeats" --> EUR
+    SALES -. "Resolución de catálogo" .-> EUR
+    SALES ==>|"Llamada directa OpenFeign"| CAT
 ```
-http://192.168.1.50:8082/api/games/1
-```
-Nos enfrentariamos a fallas severas en entornos de produccion:
-1. **IPs Dinamicas**: En entornos con Docker, Kubernetes o nubes como AWS, los contenedores se destruyen y recrean constantemente con direcciones IP distintas.
-2. **Escalado Horizontal**: Si levantamos 3 instancias de `catalog-service` para soportar alto trafico, una IP fija solo enviaria peticiones a una unica instancia, ignorando a las demas.
-3. **Punto Unico de Falla**: Si la maquina con esa IP se apaga, el servicio consumidor se rompe por completo.
-
-### La Solucion: Patron Service Registry (Directorio Central)
-`eureka-server` resuelve este problema actuando como la **agenda telefonica central** del sistema:
-* Los microservicios no conocen las IPs de sus companeros.
-* Solo conocen el **nombre logico** del servicio al que desean llamar (por ejemplo: `CATALOG-SERVICE`).
-* Eureka se encarga de resolver ese nombre a la IP y puerto activos en tiempo real.
 
 ---
 
-## 2. Diagrama de Interaccion en la Arquitectura
+## 4. Decisiones de arquitectura
 
+### 4.1 Desacoplamiento de infraestructura vs URLs fijas (Hardcoded)
+- Sin un servidor de descubrimiento, `sales-service` tendría que configurar URLs como `http://192.168.1.100:8082`.
+- Si el contenedor del catálogo se reinicia en otra IP o se despliega una segunda réplica, el sistema se rompería.
+- Con Eureka, los clientes solo invocan el nombre virtual `http://catalog-service`.
+
+### 4.2 Balanceo de carga del lado del cliente (Client-Side Load Balancing)
+- Eureka entrega a los clientes (vía OpenFeign y Spring Cloud LoadBalancer) la lista de todas las instancias saludables.
+- El propio cliente decide a qué réplica enviar la petición, eliminando la necesidad de balanceadores de carga de hardware intermedios costosos.
+
+### 4.3 Almacenamiento en memoria ultrarrápido
+- El registro de instancias reside en memoria RAM dentro del servidor Eureka.
+- Esto permite resoluciones de nombres en microsegundos sin sobrecargar bases de datos secundarias.
+
+---
+
+## 5. Arquitectura y funcionamiento interno
+
+```mermaid
+flowchart LR
+    subgraph Eureka Server
+        REG[Registro en Memoria]
+        EVICT[Eviction Timer<br/>(Temporizador de desalojo)]
+        DASH[Web Dashboard<br/>:8761]
+    end
+
+    CLIENT[Cliente Eureka] -->|POST /apps| REG
+    CLIENT -->|PUT /apps (Heartbeat)| REG
+    EVICT -->|Elimina instancias caídas| REG
+    REG --> DASH
 ```
-                                  +-----------------------------+
-                                  |        EUREKA SERVER        |
-                                  |      Puerto: 8761           |
-                                  |   (Service Registry Hub)    |
-                                  +--------------+--------------+
-                                                 |
-                          +----------------------+----------------------+
-                          | 1. Heartbeat / Registro                     | 1. Heartbeat / Registro
-                          |    "SALES-SERVICE en 8081"                  |    "CATALOG-SERVICE en 8082"
-                          v                                             v
-            +---------------------------+                 +---------------------------+
-            |       SALES-SERVICE       |                 |      CATALOG-SERVICE      |
-            |        Puerto 8081        |                 |        Puerto 8082        |
-            |     Base de Datos H2      |                 |    Base de Datos Mongo    |
-            |   (Transacciones SQL)     |                 |     (Catalogo NoSQL)      |
-            +-------------+-------------+                 +-------------+-------------+
-                          |                                             ^
-                          | 2. Consulta direccion y envia peticion      |
-                          |    GET http://CATALOG-SERVICE/api/games/{id}|
-                          +---------------------------------------------+
+
+### Componentes internos:
+1. **Instance Registry:** Tabla hash concurrente en memoria donde se indexan las instancias por nombre de aplicación en mayúsculas (`SALES-SERVICE`, `CATALOG-SERVICE`).
+2. **Heartbeat Receiver:** Endpoint REST que procesa las renovaciones de arrendamiento enviadas periódicamente por los clientes.
+3. **Eviction Task:** Proceso en segundo plano que remueve instancias que dejaron de enviar señales de vida durante el período de tolerancia (90 segundos).
+
+---
+
+## 6. Ciclo de vida de registro y descubrimiento
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant S as sales-service
+    participant E as eureka-server
+    participant C as catalog-service
+
+    Note over S,C: 1. Registro Inicial
+    C->>E: POST /eureka/apps/CATALOG-SERVICE (Host, IP, Puerto: 8082)
+    S->>E: POST /eureka/apps/SALES-SERVICE (Host, IP, Puerto: 8081)
+    E-->>C: 204 No Content (Registrado)
+    E-->>S: 204 No Content (Registrado)
+
+    Note over S,E: 2. Renovación continua
+    loop Cada 30 segundos
+        S->>E: PUT /eureka/apps/SALES-SERVICE (Heartbeat)
+        C->>E: PUT /eureka/apps/CATALOG-SERVICE (Heartbeat)
+        E-->>S: 200 OK
+        E-->>C: 200 OK
+    end
+
+    Note over S,C: 3. Descubrimiento y llamada
+    S->>E: GET /eureka/apps/CATALOG-SERVICE
+    E-->>S: Lista de instancias disponibles [localhost:8082]
+    S->>C: Petición HTTP directa vía OpenFeign
 ```
 
 ---
 
-## 3. Ciclo de Vida y Mecanismos de Operacion
+## 7. Estructura del proyecto
 
-### A. Registro Inicial (Service Registration)
-Cuando un microservicio (como `sales-service` o `catalog-service`) se inicia:
-1. Lee la propiedad `eureka.client.service-url.defaultZone` de su archivo `application.properties`.
-2. Emite una peticion HTTP POST a `http://localhost:8761/eureka/apps/{APP_NAME}`.
-3. Envia sus metadatos: Nombre de aplicacion, IP del host, puerto activo y estado inicial (`UP`).
+```
+eureka-server/
+├── .mvn/wrapper/                    # Maven Wrapper para compilación sin instalación local
+├── src/
+│   ├── main/
+│   │   ├── java/com/jonathan/gamestore/eureka/
+│   │   │   └── EurekaServerApplication.java   # Clase principal con @EnableEurekaServer
+│   │   └── resources/
+│   │       └── application.properties         # Configuración del servidor y puerto 8761
+│   └── test/
+│       └── java/com/jonathan/gamestore/eureka/
+│           └── EurekaServerApplicationTests.java
+├── mvnw / mvnw.cmd          # Scripts de arranque multiplataforma
+├── pom.xml                  # Dependencias de Spring Cloud Eureka Server
+└── README.md
+```
 
-### B. Mantenimiento del Registro y Latidos (Heartbeats)
-* Cada cliente registrado envia una peticion de renovacion (*heartbeat*) cada **30 segundos** por defecto.
-* Si Eureka no recibe una renovacion durante **90 segundos**, asume que la instancia sufrio una caida abrupta y la remueve del directorio disponible para evitar enrutarle trafico fallido.
+### Clase principal: `EurekaServerApplication.java`
+```java
+@SpringBootApplication
+@EnableEurekaServer
+public class EurekaServerApplication {
+    public static void main(String[] args) {
+        SpringApplication.run(EurekaServerApplication.class, args);
+    }
+}
+```
+* `@EnableEurekaServer`: Anotación angular que activa el servlet dispatcher de Netflix, los endpoints REST del registro y la interfaz gráfica de administración.
 
-### C. Modo de Autoconservacion (Self-Preservation Mode)
-Si se produce un corte temporal de red entre los servidores y Eureka deja de recibir latidos de muchos servicios de golpe, Eureka activa su mecanismo de proteccion:
-* **No elimina inmediatamente las instancias**: Entiende que el problema puede ser de red y no de caida del servicio.
-* Muestra una advertencia visual en el panel web:  
+---
+
+## 8. Dashboard web de monitoreo
+
+Al levantar el servicio, la interfaz gráfica está disponible en:  
+**URL:** [http://localhost:8761](http://localhost:8761)
+
+### Secciones clave del panel:
+* **System Status:** Memoria consumida, tiempo encendido (uptime) y entorno de ejecución.
+* **Instances currently registered with Eureka:** Muestra una tabla con cada microservicio registrado, su nombre en mayúsculas, cantidad de réplicas y estado (`UP (1) - 192.168.1.X:puerto`).
+* **General Info:** Estado de la renovación de arrendamientos y modo de protección.
+
+---
+
+## 9. Referencia de la API de Eureka
+
+Aunque los microservicios se comunican mediante los starters de Spring Cloud, Eureka expone endpoints HTTP directos:
+
+| Método | Ruta | Formato | Descripción |
+|---|---|---|---|
+| `GET` | `/eureka/apps` | XML / JSON | Lista todas las aplicaciones registradas y sus réplicas vivas. |
+| `GET` | `/eureka/apps/{appName}` | XML / JSON | Metadatos y direcciones de una aplicación específica. |
+| `POST` | `/eureka/apps/{appName}` | JSON | Registro manual de una nueva instancia. |
+| `PUT` | `/eureka/apps/{appName}/{instanceId}` | — | Renovación de arrendamiento (Heartbeat). |
+| `DELETE` | `/eureka/apps/{appName}/{instanceId}` | — | Cancelación de registro al apagarse un servicio. |
+
+---
+
+## 10. Manejo de resiliencia y fallas
+
+### Modo de Autoconservación (Self-Preservation Mode)
+* **¿Qué es?** Si ocurre una desconexión de red entre servidores, muchos servicios podrían fallar en enviar sus heartbeats de golpe.
+* **Comportamiento:** En lugar de asumir que todos los microservicios murieron y vaciar la agenda, Eureka activa el modo de autoconservación: **mantiene vivas las instancias en el registro** hasta que la red se estabilice.
+* **Mensaje característico en el Dashboard:**  
   *`EMERGENCY! EUREKA MAY BE INCORRECTLY CLAIMING INSTANCES ARE UP WHEN THEY'RE NOT.`*
 
 ---
 
-## 4. Configuracion del Servidor (`application.properties`)
+## 11. Configuración
+
+Archivo: `src/main/resources/application.properties`
 
 ```properties
-# Nombre logico del servidor en el contexto de Spring
 spring.application.name=eureka-server
-
-# Puerto estandar de la industria para Netflix Eureka Server
 server.port=8761
 
-# Deshabilita el auto-registro: Eureka es el servidor, no necesita registrarse a si mismo
+# Deshabilita el auto-registro: Eureka es el registro, no un cliente consumidor
 eureka.client.register-with-eureka=false
 
-# Deshabilita la obtencion del registro: Al ser el nodo maestro, ya posee la informacion localmente
+# Deshabilita la sincronización con pares (modo nodo único para desarrollo)
 eureka.client.fetch-registry=false
 
-# Configuracion de bitacora para diagnostico en consola
+# Registro de logs
 logging.level.com.netflix.eureka=INFO
 logging.level.org.springframework.cloud=INFO
 ```
 
 ---
 
-## 5. Anatomia de la Clase Principal (`EurekaServerApplication.java`)
+## 12. Instalación y ejecución
 
-```java
-package com.jonathan.gamestore.eureka;
+### Requisitos previos
+- **JDK 17** o superior (`java -version`).
+- Puerto `8761` disponible.
 
-import org.springframework.boot.SpringApplication;
-import org.springframework.boot.autoconfigure.SpringBootApplication;
-import org.springframework.cloud.netflix.eureka.server.EnableEurekaServer;
-
-@SpringBootApplication
-@EnableEurekaServer
-public class EurekaServerApplication {
-
-    public static void main(String[] args) {
-        SpringApplication.run(EurekaServerApplication.class, args);
-    }
-}
+### Paso 1. Clonar el repositorio
+```bash
+git clone https://github.com/Alger125/eureka-server.git
+cd eureka-server
 ```
 
-### Explicacion detallada de Anotaciones:
-* `@SpringBootApplication`:
-  * Habilita el escaneo automatico de componentes (`@ComponentScan`).
-  * Inicializa el contenedor de inyeccion de dependencias de Spring.
-  * Arranca el servidor web embebido (Tomcat) para recibir trafico HTTP.
-* `@EnableEurekaServer`:
-  * Anotacion de Spring Cloud Netflix que transforma la aplicacion en un registro de servicios.
-  * Despliega internamente los servlets y controladores REST que atienden a los clientes.
-  * Habilita el panel de administracion web interactivo.
+### Paso 2. Iniciar con Maven Wrapper
+```bash
+./mvnw spring-boot:run          # Windows: .\mvnw.cmd spring-boot:run
+```
+
+### Alternativa: Ejecución de JAR con optimización de memoria (256MB)
+```bash
+./mvnw clean package -DskipTests
+java -Xmx256m -jar target/eureka-server-0.0.1-SNAPSHOT.jar
+```
 
 ---
 
-## 6. Panel de Monitoreo Web (Dashboard)
+## 13. Guía de pruebas y verificación
 
-Una vez iniciado el servidor, el panel visual esta disponible en:  
-**URL:** [http://localhost:8761](http://localhost:8761)
+### 1. Comprobación vía navegador web
+Abrir [http://localhost:8761](http://localhost:8761) y verificar que cargue la interfaz de Spring Eureka.
 
-### Secciones principales del Dashboard:
-1. **System Status**: Muestra metricas de memoria RAM utilizada, numero de nucleos y entorno.
-2. **DS Replicas**: Nodos Eureka duplicados para alta disponibilidad (en desarrollo local aparece vacio).
-3. **Instances currently registered with Eureka**:
-   * **Application**: Nombre logico en mayusculas (`SALES-SERVICE`, `CATALOG-SERVICE`).
-   * **AMIs**: Identificadores de instancia.
-   * **Availability Zones**: Zonas de disponibilidad.
-   * **Status**: Estado actual de salud (ej: `UP (1) - 192.168.1.10:sales-service:8081`).
-
----
-
-## 7. Instrucciones de Compilacion y Ejecucion
-
-### Opcion A: Modo Desarrollo (Maven Wrapper)
+### 2. Consulta de aplicaciones registradas vía PowerShell
 ```powershell
-cd C:\Users\ErickJimz\IdeaProjects\eureka-server
-.\mvnw.cmd spring-boot:run
-```
-
-### Opcion B: Ejecucion Optimizada con Limite de Memoria RAM (8 GB Setup)
-Para mantener un consumo de memoria ligero en la estacion de trabajo:
-```powershell
-cd C:\Users\ErickJimz\IdeaProjects\eureka-server
-.\mvnw.cmd clean package -DskipTests
-java -Xmx256m -jar .\target\eureka-server-0.0.1-SNAPSHOT.jar
-```
-* **Puerto de escucha:** `8761`
-* **Consumo de memoria estimado:** ~180MB - 250MB RAM.
-
----
-
-## 8. Verificacion Rapida de Operatividad
-
-Para comprobar que el servidor esta respondiendo correctamente desde la terminal:
-
-```powershell
-# En PowerShell:
 Invoke-RestMethod -Uri "http://localhost:8761/eureka/apps" -Headers @{"Accept"="application/json"} | ConvertTo-Json -Depth 4
 ```
-Si el servidor esta activo, retornara la lista de aplicaciones registradas en formato JSON.
-
 
 ---
 
-## 9. Flujo de Interaccion Integral del Ecosistema (End-to-End)
+## 14. Solución de problemas
 
-Esta seccion describe la secuencia operativa completa que conecta a **`eureka-server`**, **`catalog-service`** y **`sales-service`** en un escenario real de compra de videojuegos.
+| Síntoma | Causa probable | Solución |
+|---|---|---|
+| `Port 8761 is already in use` | Ya hay una instancia previa corriendo o un proceso ocupa el puerto. | Detener el proceso anterior en el Administrador de Tareas o cambiar el puerto en `application.properties`. |
+| Las instancias no aparecen en el Dashboard | `catalog-service` o `sales-service` no tienen configurado `eureka.client.service-url.defaultZone`. | Verificar que los otros servicios apunten a `http://localhost:8761/eureka/`. |
+| Alerta roja de Self-Preservation | Varios servicios se detuvieron abruptamente en desarrollo local. | Normal en entornos de desarrollo; desaparece al reiniciar Eureka o volver a encender los servicios. |
 
-### Diagrama de Secuencia de la Interaccion Completa
+---
 
-```
-[Usuario / Postman]     [sales-service:8081]      [eureka-server:8761]      [catalog-service:8082]     [MongoDB:27017]
-         |                       |                         |                          |                       |
-         |=== 1. Registro inicial en el ecosistema =========================================================|
-         |                       |                         |<--- Registra CATALOG ----|                       |
-         |                       |<--- Registra SALES -----|                          |                       |
-         |                       |                         |                          |                       |
-         |=== 2. Alta de Videojuego en Catalogo ============================================================|
-         |-- POST /api/games -------------------------------------------------------->|                       |
-         |   (Elden Ring, $59.99, stock: 10)               |                          |-- save(Game) -------->|
-         |                                                 |                          |<-- id: "674a123f..." -|
-         |<-- HTTP 201 Created (id: "674a123f...") -----------------------------------|                       |
-         |                                                 |                          |                       |
-         |=== 3. Intento de Compra con Validacion Sincrona (OpenFeign) =====================================|
-         |-- POST /api/orders ---------------------------->|                          |                       |
-         |   (gameId: "674a123f...", qty: 2)               |                          |                       |
-         |                       |-- 3.1 Resolucion ------>|                          |                       |
-         |                       |    "¿Donde esta CATALOG?"                          |                       |
-         |                       |<-- Retorna 8082 --------|                          |                       |
-         |                       |                                                    |                       |
-         |                       |-- 3.2 GET /api/games/674a123f... (OpenFeign) ----->|                       |
-         |                       |                                                    |-- findById() -------->|
-         |                       |                                                    |<-- Game Document -----|
-         |                       |<-- HTTP 200 OK (Price: $59.99, Stock: 10) ---------|                       |
-         |                       |                                                    |                       |
-         |                       |-- 3.3 Reglas de Negocio en Servidor:               |                       |
-         |                       |   a) Verifica: stock (10) >= cantidad (2) -> OK    |                       |
-         |                       |   b) Blindaje: Aplica $59.99 (ignora cliente)      |                       |
-         |                       |   c) Genera CD-Key: "STEAM-A8F2-4B1C..."           |                       |
-         |                       |   d) Persiste en H2 SQL (Transaccion ACID)         |                       |
-         |<-- HTTP 201 Created --|                                                    |                       |
-         |   (Total: $119.98, CD-Keys generadas)                                      |                       |
-```
+## 15. Mejoras futuras
 
-### Guia de Reproduccion Paso a Paso de la Interaccion
+- **Alta disponibilidad (Peer Awareness / Clúster):** desplegar múltiples nodos de Eureka en réplica cruzada para eliminar el punto único de fallo en producción.
+- **Seguridad perimetral:** proteger el acceso al panel y endpoints de Eureka mediante Spring Security con credenciales HTTP Basic.
+- **Integración con Spring Cloud Gateway:** exponer el ecosistema al mundo exterior a través de una pasarela unificada enrutada por Eureka.
+- **Contenedor Docker:** empaquetado en imagen `Dockerfile` liviana y despliegue automatizado con `docker-compose.yml`.
 
-#### Paso 1: Inicializar Eureka Server
-En una terminal:
-```powershell
-cd C:\Users\ErickJimz\IdeaProjects\eureka-server
-.\mvnw.cmd spring-boot:run
-```
-*Verificar:* Abrir el navegador en `http://localhost:8761` (Dashboard de Eureka activo).
+---
 
-#### Paso 2: Inicializar Catalog Service
-En una segunda terminal:
-```powershell
-cd C:\Users\ErickJimz\IdeaProjects\catalog-service
-.\mvnw.cmd spring-boot:run
-```
-*Verificar:* En `http://localhost:8761` aparecera registrado el nodo **`CATALOG-SERVICE`** en estado `UP`.
+## Autor
 
-#### Paso 3: Inicializar Sales Service
-En una tercera terminal:
-```powershell
-cd C:\Users\ErickJimz\IdeaProjects\sales-service
-.\mvnw.cmd spring-boot:run
-```
-*Verificar:* En `http://localhost:8761` aparecera registrado el nodo **`SALES-SERVICE`** en estado `UP`.
-
-#### Paso 4: Crear el Videojuego en el Catalogo (MongoDB)
-```powershell
-$gameResponse = Invoke-RestMethod -Uri "http://localhost:8082/api/games" -Method Post -ContentType "application/json" -Body '{
-  "title": "Elden Ring",
-  "description": "Edicion Estandar",
-  "genre": "RPG",
-  "price": 59.99,
-  "stock": 10,
-  "platforms": ["PC", "PS5"]
-}'
-$gameId = $gameResponse.id
-Write-Host "Juego registrado con ID NoSQL: $gameId"
-```
-
-#### Paso 5: Emitir la Orden de Compra en Ventas (Consumiendo Catalogo via OpenFeign)
-```powershell
-Invoke-RestMethod -Uri "http://localhost:8081/api/orders" -Method Post -ContentType "application/json" -Body @"
-{
-  "userId": 101,
-  "items": [
-    {
-      "gameId": "$gameId",
-      "gameTitle": "Elden Ring",
-      "unitPrice": 59.99,
-      "quantity": 2
-    }
-  ]
-}
-"@ | ConvertTo-Json -Depth 5
-```
-
-*Resultado observable:*
-* `sales-service` consulta de forma invisible a `catalog-service` a traves de Eureka.
-* Valida existencias y precio en MongoDB.
-* Genera las claves digitales seguras para el usuario.
-* Retorna la orden con el monto oficial calculado ($119.98).
+**Alger125** · [github.com/Alger125](https://github.com/Alger125)
